@@ -1,0 +1,15 @@
+<!-- 深信服防火墙 Syslog Decoder -->
+<decoder name="sangfor-af">
+  <program_name>fwlog</program_name>
+</decoder>
+
+<decoder name="sangfor-af-fields">
+  <parent>sangfor-af</parent>
+  <prematch>public</prematch>
+  <regex>.*源IP:([0-9.]+), 源端口:([0-9]+), 目的IP:([0-9.]+), 目的端口:([0-9]+)</regex>
+  <order>srcip, srcport, dstip, dstport</order>
+</decoder>
+
+<decoder name="sangfor-waf">
+  <program_name>waflog</program_name>
+</decoder>

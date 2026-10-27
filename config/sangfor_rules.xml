@@ -1,0 +1,16 @@
+<!-- 深信服防火墙告警规则 -->
+<group name="sangfor,firewall,network_security,">
+
+  <rule id="100200" level="5">
+    <decoded_as>sangfor-af</decoded_as>
+    <description>深信服防火墙日志</description>
+    <group>firewall,network_security,</group>
+  </rule>
+
+  <rule id="100220" level="5">
+    <decoded_as>sangfor-waf</decoded_as>
+    <description>深信服WAF日志</description>
+    <group>waf,network_security,</group>
+  </rule>
+
+</group>

@@ -1,0 +1,8 @@
+# Python依赖
+# 态势感知后端 soc_api.py
+# 标准库为主，无需额外安装，如需扩展可参考以下依赖：
+
+# requests>=2.28.0
+# urllib3>=1.26.0
+# sqlite3 (Python内置)
+# json (Python内置)
