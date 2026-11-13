@@ -416,6 +416,40 @@ def event_trend(range_str='7d'):
         points.append(b)
     return {'range': range_str, 'points': points}
 
+GEO_DB_PATH = '/data/soc/GeoLite2-City.mmdb'
+_GEO_READER = None
+_GEO_CACHE = {}
+
+def geo_of(ip):
+    """源 IP -> 经纬度（本地 GeoLite2 离线库，失败返回 None）"""
+    global _GEO_READER
+    if not ip:
+        return None
+    if ip in _GEO_CACHE:
+        return _GEO_CACHE[ip]
+    res = None
+    try:
+        import ipaddress
+        addr = ipaddress.ip_address(ip)
+        if addr.is_private or addr.is_loopback:
+            _GEO_CACHE[ip] = None
+            return None
+        import geoip2.database
+        if _GEO_READER is None:
+            _GEO_READER = geoip2.database.Reader(GEO_DB_PATH)
+        r = _GEO_READER.city(ip)
+        lat, lon = r.location.latitude, r.location.longitude
+        if lat is not None and lon is not None:
+            res = {
+                'lat': round(lat, 4), 'lon': round(lon, 4),
+                'country': (r.country.names.get('zh-CN') or r.country.name or ''),
+                'city': (r.city.names.get('zh-CN') or r.city.name or '')
+            }
+    except Exception:
+        res = None
+    _GEO_CACHE[ip] = res
+    return res
+
 def metrics(time_range='now-24h'):
     result = {'live':True,'agentsTotal':0,'agentsActive':0,'agents':[],'alerts24h':0,'highAlerts24h':0,'riskScore':100,'topIps':[],'riskAssets':[],'recentEvents':[],'hostEvents':[],'fwEvents':[],'trend':[],'severity':{'critical':0,'high':0,'medium':0,'low':0},'hostSeverity':{'critical':0,'high':0,'medium':0,'low':0},'hostAlerts24h':0,'hostHighAlerts24h':0,'vulnerabilities':{'total':0,'items':[],'severity':{}}}
     agents = get_json('https://127.0.0.1:55000/agents?limit=500', token=token()).get('data',{}).get('affected_items',[])
@@ -507,6 +541,24 @@ def metrics(time_range='now-24h'):
         other_top = sorted([[k, v] for k, v in all_src_ips.items()], key=lambda x: -x[1])[:5]
         result['topIps'] = fw_top + other_top[:5-len(fw_top)]
         result['topFwIps'] = fw_top
+        # 全球威胁落点：源 IP -> 经纬度（GeoLite2 离线解析）
+        try:
+            high_by_ip = {}
+            for ev_i in result['fwEvents']:
+                ip_i = ev_i.get('srcip') or ''
+                if ip_i and ev_i.get('level', 0) >= 8:
+                    high_by_ip[ip_i] = high_by_ip.get(ip_i, 0) + 1
+            geo_pts = []
+            for ip_i, cnt_i in sorted([[k, v] for k, v in fw_src_ips.items()], key=lambda x: -x[1])[:14]:
+                g_i = geo_of(ip_i)
+                if not g_i:
+                    continue
+                geo_pts.append({'ip': ip_i, 'count': cnt_i, 'high': high_by_ip.get(ip_i, 0),
+                                'lat': g_i['lat'], 'lon': g_i['lon'],
+                                'country': g_i['country'], 'city': g_i['city']})
+            result['geoPoints'] = geo_pts
+        except Exception:
+            result['geoPoints'] = []
         result['highAlerts24h']=result['severity']['critical']+result['severity']['high']
         result['hostAlerts24h']=len(result['hostEvents'])
         result['hostHighAlerts24h']=result['hostSeverity']['critical']+result['hostSeverity']['high']
