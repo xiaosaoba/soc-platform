@@ -450,6 +450,79 @@ def geo_of(ip):
     _GEO_CACHE[ip] = res
     return res
 
+_GEO_PT_CACHE = {}
+
+def fw_geo_points(time_range, cache_key, max_docs=1200):
+    """取防火墙事件解析源 IP 计数（倒序取最近 max_docs 条），并解析经纬度。结果缓存 60s。"""
+    import time as _time
+    hit = _GEO_PT_CACHE.get(cache_key)
+    if hit and _time.time() - hit[0] < 60:
+        return hit[1]
+    counts, highs = {}, {}
+    after = None
+    fetched = 0
+    while fetched < max_docs:
+        q = {
+            'size': 500, 'track_total_hits': False,
+            'query': {'bool': {
+                'filter': [{'range': {'timestamp': {'gte': time_range}}}],
+                'should': [{'term': {'decoder.name': 'sangfor-af'}}, {'term': {'decoder.name': 'sangfor-waf'}}],
+                'minimum_should_match': 1,
+                'must_not': LOW_SEV_MUST_NOT + STATS_MUST_NOT
+            }},
+            'sort': [{'timestamp': {'order': 'desc'}}, {'_id': {'order': 'desc'}}],
+            '_source': ['full_log', 'rule.level']
+        }
+        if after:
+            q['search_after'] = after
+        resp = get_json('https://127.0.0.1:9200/wazuh-alerts-*/_search', 'POST', q,
+                        CREDS['WAZUH_DASHBOARD_USER'], CREDS['WAZUH_DASHBOARD_PASSWORD'])
+        hits = resp.get('hits', {}).get('hits', [])
+        if not hits:
+            break
+        for h in hits:
+            src = h.get('_source', {})
+            parsed = parse_fw_log(src.get('full_log', ''))
+            ip = parsed.get('srcip')
+            if not ip:
+                continue
+            counts[ip] = counts.get(ip, 0) + 1
+            sev = parsed.get('severity', '')
+            if sev in ('严重', '高', '高危', 'critical', 'high'):
+                highs[ip] = highs.get(ip, 0) + 1
+        after = hits[-1].get('sort')
+        fetched += len(hits)
+        if len(hits) < 500:
+            break
+    pts = []
+    for ip, cnt in sorted(counts.items(), key=lambda x: -x[1])[:16]:
+        g = geo_of(ip)
+        if not g:
+            continue
+        pts.append({'ip': ip, 'count': cnt, 'high': highs.get(ip, 0),
+                    'lat': g['lat'], 'lon': g['lon'], 'country': g['country'], 'city': g['city'],
+                    'overseas': g['country'] not in ('中国', '香港', '澳门', '台湾')})
+    _GEO_PT_CACHE[cache_key] = (_time.time(), pts)
+    return pts
+
+def geo_summary(pts):
+    abroad = [p for p in pts if p.get('overseas')]
+    home = [p for p in pts if not p.get('overseas')]
+    cs = {}
+    for p in abroad:
+        k = p['country'] or '未知'
+        v = cs.setdefault(k, {'count': 0, 'high': 0, 'ips': 0})
+        v['count'] += p['count']; v['high'] += p['high']; v['ips'] += 1
+    return {
+        'total': sum(p['count'] for p in pts),
+        'overseasCount': sum(p['count'] for p in abroad),
+        'overseasHigh': sum(p['high'] for p in abroad),
+        'overseasIps': len(abroad),
+        'domesticCount': sum(p['count'] for p in home),
+        'domesticIps': len(home),
+        'countries': sorted([[k, v['count'], v['high'], v['ips']] for k, v in cs.items()], key=lambda x: -x[1])[:6]
+    }
+
 def metrics(time_range='now-24h'):
     result = {'live':True,'agentsTotal':0,'agentsActive':0,'agents':[],'alerts24h':0,'highAlerts24h':0,'riskScore':100,'topIps':[],'riskAssets':[],'recentEvents':[],'hostEvents':[],'fwEvents':[],'trend':[],'severity':{'critical':0,'high':0,'medium':0,'low':0},'hostSeverity':{'critical':0,'high':0,'medium':0,'low':0},'hostAlerts24h':0,'hostHighAlerts24h':0,'vulnerabilities':{'total':0,'items':[],'severity':{}}}
     agents = get_json('https://127.0.0.1:55000/agents?limit=500', token=token()).get('data',{}).get('affected_items',[])
@@ -541,24 +614,14 @@ def metrics(time_range='now-24h'):
         other_top = sorted([[k, v] for k, v in all_src_ips.items()], key=lambda x: -x[1])[:5]
         result['topIps'] = fw_top + other_top[:5-len(fw_top)]
         result['topFwIps'] = fw_top
-        # 全球威胁落点：源 IP -> 经纬度（GeoLite2 离线解析）
+        # 全球威胁落点：防火墙源 IP -> 经纬度（GeoLite2 离线解析）
         try:
-            high_by_ip = {}
-            for ev_i in result['fwEvents']:
-                ip_i = ev_i.get('srcip') or ''
-                if ip_i and ev_i.get('level', 0) >= 8:
-                    high_by_ip[ip_i] = high_by_ip.get(ip_i, 0) + 1
-            geo_pts = []
-            for ip_i, cnt_i in sorted([[k, v] for k, v in fw_src_ips.items()], key=lambda x: -x[1])[:14]:
-                g_i = geo_of(ip_i)
-                if not g_i:
-                    continue
-                geo_pts.append({'ip': ip_i, 'count': cnt_i, 'high': high_by_ip.get(ip_i, 0),
-                                'lat': g_i['lat'], 'lon': g_i['lon'],
-                                'country': g_i['country'], 'city': g_i['city']})
+            geo_pts = fw_geo_points(time_range, time_range)
             result['geoPoints'] = geo_pts
+            result['geoSummary'] = geo_summary(geo_pts)
         except Exception:
             result['geoPoints'] = []
+            result['geoSummary'] = geo_summary([])
         result['highAlerts24h']=result['severity']['critical']+result['severity']['high']
         result['hostAlerts24h']=len(result['hostEvents'])
         result['hostHighAlerts24h']=result['hostSeverity']['critical']+result['hostSeverity']['high']

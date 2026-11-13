@@ -60,61 +60,96 @@ yyyy`);var r=ks(t),i=n?`getUTC`:`get`,a=r[i+`FullYear`](),o=r[i+`Month`]()+1,s=r
       if(!isFinite(la)||!isFinite(lo)||(la===0&&lo===0)){return;}
       arcs.push({v:vec(la,lo),p:p,off:(ix%10)/10});
     });
+    var ov=0,dom=0,ocn={},tot=0;
+    (gp||[]).forEach(function(p){var c2=p.count||1;tot+=c2;if(p.overseas){ov+=c2;ocn[p.country||`未知`]=1;}else{dom+=c2;}});
     function seg(list){if(!list.length){return;}ctx.beginPath();ctx.moveTo(list[0][0],list[0][1]);for(var k=1;k<list.length;k++){ctx.lineTo(list[k][0],list[k][1]);}ctx.stroke();}
+    function arcPts(a,from,to,rot,cx,cy,R){
+      var out=[],steps=44;
+      for(var k=0;k<=steps;k++){
+        var fr=from+(to-from)*(k/steps),q=sl(a.v,tv,fr),lf=1+0.17*Math.sin(Math.PI*fr);
+        var qq=ry({x:q.x*lf,y:q.y*lf,z:q.z*lf},rot);
+        out.push(qq.z>0?[cx+qq.x*R,cy-qq.y*R]:null);
+      }
+      return out;
+    }
     function frame(ts){
       var W=cv.clientWidth||1,H=cv.clientHeight||1,dpr=window.devicePixelRatio||1;
       if(cv.width!==Math.floor(W*dpr)||cv.height!==Math.floor(H*dpr)){cv.width=Math.floor(W*dpr);cv.height=Math.floor(H*dpr);}
       ctx.setTransform(dpr,0,0,dpr,0,0);ctx.clearRect(0,0,W,H);
       var cx=W/2,cy=H/2,R=Math.min(W,H)*0.44;
       var rot=str.current.rot;
+      var halo=ctx.createRadialGradient(cx,cy,R*0.9,cx,cy,R*1.28);
+      halo.addColorStop(0,`rgba(40,150,255,0.20)`);halo.addColorStop(1,`rgba(10,40,90,0)`);
+      ctx.beginPath();ctx.arc(cx,cy,R*1.28,0,6.2832);ctx.fillStyle=halo;ctx.fill();
       var g=ctx.createRadialGradient(cx-R*0.35,cy-R*0.4,R*0.12,cx,cy,R);
-      g.addColorStop(0,`rgba(44,126,214,0.62)`);g.addColorStop(0.62,`rgba(12,54,112,0.55)`);g.addColorStop(1,`rgba(4,18,42,0.26)`);
+      g.addColorStop(0,`rgba(24,72,132,0.58)`);g.addColorStop(0.62,`rgba(8,30,68,0.52)`);g.addColorStop(1,`rgba(3,12,28,0.24)`);
       ctx.beginPath();ctx.arc(cx,cy,R,0,6.2832);ctx.fillStyle=g;ctx.fill();
       for(var li=0;li<GBL_LAND.length;li++){
         var ring=GBL_LAND[li],vis=[],af=true,vi,qv;
         for(vi=0;vi<ring.length;vi++){qv=ry(vec(ring[vi][1],ring[vi][0]),rot);if(qv.z>0.01){vis.push([cx+qv.x*R,cy-qv.y*R]);}else{af=false;}}
         if(vis.length<3){continue;}
+        ctx.shadowBlur=6;ctx.shadowColor=`rgba(64,190,255,0.45)`;
         if(af&&vis.length===ring.length){
           ctx.beginPath();for(vi=0;vi<vis.length;vi++){if(vi===0){ctx.moveTo(vis[vi][0],vis[vi][1]);}else{ctx.lineTo(vis[vi][0],vis[vi][1]);}}ctx.closePath();
-          ctx.fillStyle=`rgba(48,122,200,0.5)`;ctx.fill();
-          ctx.strokeStyle=`rgba(126,206,255,0.5)`;ctx.lineWidth=1;ctx.stroke();
+          ctx.fillStyle=`rgba(18,56,102,0.55)`;ctx.fill();
+          ctx.strokeStyle=`rgba(102,226,255,0.78)`;ctx.lineWidth=1.1;ctx.stroke();
         }else{
-          var sg=[];ctx.strokeStyle=`rgba(86,178,255,0.26)`;ctx.lineWidth=1;
+          var sg=[];ctx.strokeStyle=`rgba(88,200,255,0.45)`;ctx.lineWidth=1;
           for(vi=0;vi<ring.length;vi++){qv=ry(vec(ring[vi][1],ring[vi][0]),rot);if(qv.z>0.01){sg.push([cx+qv.x*R,cy-qv.y*R]);}else{seg(sg);sg=[];}}
           seg(sg);
         }
+        ctx.shadowBlur=0;
       }
-      ctx.lineWidth=1;ctx.strokeStyle=`rgba(86,176,255,0.26)`;
+      ctx.lineWidth=1;ctx.strokeStyle=`rgba(70,150,220,0.18)`;
       var la,lo,list,vv;
       for(la=-60;la<=60;la+=30){list=[];for(lo=0;lo<=366;lo+=6){vv=ry(vec(la,lo),rot);if(vv.z>0){list.push([cx+vv.x*R,cy-vv.y*R]);}else{seg(list);list=[];}}seg(list);}
       for(lo=0;lo<360;lo+=30){list=[];for(la=-90;la<=90;la+=6){vv=ry(vec(la,lo),rot);if(vv.z>0){list.push([cx+vv.x*R,cy-vv.y*R]);}else{seg(list);list=[];}}seg(list);}
-      ctx.beginPath();ctx.arc(cx,cy,R,0,6.2832);ctx.strokeStyle=`rgba(64,196,255,0.38)`;ctx.lineWidth=1.4;ctx.stroke();
-      var tt=ts/1000,steps=36;
+      ctx.beginPath();ctx.arc(cx,cy,R,0,6.2832);ctx.strokeStyle=`rgba(70,200,255,0.5)`;ctx.lineWidth=1.4;ctx.stroke();
+      var tt=ts/1000;
       arcs.forEach(function(a){
-        var prog=(tt*0.55+a.off)%1,prev=null;
-        ctx.strokeStyle=a.p.high?`rgba(255,86,110,0.92)`:`rgba(52,232,255,0.88)`;
-        ctx.lineWidth=1.5;
-        for(var k2=0;k2<=steps;k2++){
-          var fr=(k2/steps)*prog,q=sl(a.v,tv,fr),lf=1+0.16*Math.sin(Math.PI*fr);
-          var qq=ry({x:q.x*lf,y:q.y*lf,z:q.z*lf},rot);
-          var pt=qq.z>0?[cx+qq.x*R,cy-qq.y*R]:null;
-          if(pt&&prev){ctx.beginPath();ctx.moveTo(prev[0],prev[1]);ctx.lineTo(pt[0],pt[1]);ctx.stroke();}
-          prev=pt;
-        }
+        var base=a.p.overseas?`255,168,72`:`64,220,255`;
+        var pts=arcPts(a,0,1,rot,cx,cy,R),prev=null,k2;
+        ctx.strokeStyle=`rgba(`+base+`,0.30)`;ctx.lineWidth=1.6;ctx.shadowBlur=7;ctx.shadowColor=`rgba(`+base+`,0.55)`;
+        for(k2=0;k2<pts.length;k2++){var pt=pts[k2];if(pt&&prev){ctx.beginPath();ctx.moveTo(prev[0],prev[1]);ctx.lineTo(pt[0],pt[1]);ctx.stroke();}prev=pt;}
+        ctx.shadowBlur=0;
+        var head=(tt*0.55+a.off)%1,hp=arcPts(a,Math.max(0,head-0.1),head,rot,cx,cy,R);
+        ctx.strokeStyle=`rgba(`+base+`,0.95)`;ctx.lineWidth=2.4;ctx.shadowBlur=12;ctx.shadowColor=`rgba(`+base+`,0.9)`;
+        prev=null;
+        for(k2=0;k2<hp.length;k2++){var p2=hp[k2];if(p2&&prev){ctx.beginPath();ctx.moveTo(prev[0],prev[1]);ctx.lineTo(p2[0],p2[1]);ctx.stroke();}prev=p2;}
+        ctx.shadowBlur=0;
       });
+      var labels=[];
       arcs.forEach(function(a){
         var q=ry(a.v,rot);
         if(q.z<=0){return;}
-        var px=cx+q.x*R,py=cy-q.y*R,rad=2.5+Math.min(4,(a.p.count||1)*0.5),col=a.p.high?`255,80,104`:`34,211,238`;
-        ctx.beginPath();ctx.arc(px,py,rad+4,0,6.2832);ctx.fillStyle=`rgba(`+col+`,0.14)`;ctx.fill();
+        var px=cx+q.x*R,py=cy-q.y*R,rad=2.5+Math.min(4,(a.p.count||1)*0.5);
+        var col=a.p.high?`255,80,104`:(a.p.overseas?`255,179,64`:`34,211,238`);
+        ctx.beginPath();ctx.arc(px,py,rad+5,0,6.2832);ctx.fillStyle=`rgba(`+col+`,0.13)`;ctx.fill();
         ctx.beginPath();ctx.arc(px,py,rad,0,6.2832);ctx.fillStyle=`rgba(`+col+`,0.95)`;ctx.fill();
+        labels.push({x:px,y:py,t:(a.p.country||``)+(a.p.count?` `+a.p.count:``),c:col,n:a.p.count||1});
       });
+      labels.sort(function(x,y){return y.n-x.n;});
+      ctx.font=`600 10px sans-serif`;ctx.textBaseline=`middle`;
+      var placed=[];
+      for(var lb=0;lb<labels.length&&lb<5;lb++){
+        var L=labels[lb],okL=true,pi;
+        for(pi=0;pi<placed.length;pi++){if(Math.abs(placed[pi].x-L.x)<62&&Math.abs(placed[pi].y-L.y)<14){okL=false;break;}}
+        if(!okL){continue;}
+        var lx=L.x+9,ly=L.y-8;
+        if(lx>cv.clientWidth-70){lx=L.x-9-ctx.measureText(L.t).width;}
+        placed.push({x:lx,y:ly});
+        ctx.fillStyle=`rgba(`+L.c+`,0.92)`;
+        ctx.fillText(L.t,lx,ly);
+      }
       var tq=ry(tv,rot);
       if(tq.z>0){
         var tx=cx+tq.x*R,ty2=cy-tq.y*R,pf=(tt%2)/2,rr2=4+pf*14;
         ctx.beginPath();ctx.arc(tx,ty2,rr2,0,6.2832);ctx.strokeStyle=`rgba(255,196,64,`+(0.55*(1-pf))+`)`;ctx.lineWidth=1.5;ctx.stroke();
         ctx.beginPath();ctx.arc(tx,ty2,3,0,6.2832);ctx.fillStyle=`rgba(255,196,64,0.95)`;ctx.fill();
       }
+      ctx.font=`600 11px sans-serif`;ctx.textBaseline=`top`;
+      ctx.fillStyle=`rgba(255,179,64,0.95)`;ctx.fillText(`境外攻击 `+ov+` 次 / `+Object.keys(ocn).length+` 国`,14,14);
+      ctx.fillStyle=`rgba(120,214,255,0.85)`;ctx.fillText(`境内 `+dom+` 次 · 合计 `+tot+` 次`,14,32);
       str.current.rot=rot+0.006;
       raf=requestAnimationFrame(frame);
     }
@@ -122,8 +157,7 @@ yyyy`);var r=ks(t),i=n?`getUTC`:`get`,a=r[i+`FullYear`](),o=r[i+`Month`]()+1,s=r
     return function(){if(raf){cancelAnimationFrame(raf);}};
   },[gp]);
   return (0,$.jsx)(`canvas`,{ref:cvr,style:{position:`absolute`,inset:0,width:`100%`,height:`100%`,display:`block`}});
-}
-function Z9({title:e,children:t,className:n=``}){return(0,$.jsxs)(`section`,{className:`panel ${n}`,children:[(0,$.jsxs)(`div`,{className:`panel-title`,children:[(0,$.jsx)(`span`,{className:`diamond`}),e,(0,$.jsx)(`span`,{className:`line`})]}),t]})}function sevBucket(e){return e.severityLabel||(e.level>=12?'critical':e.level>=8?'high':e.level>=4?'medium':'low')}function lee({module:e,live:t,onEventSelect:n,onVulnSelect:i}){let r=e=>e===`active`?`#28e6a6`:e===`未接入`?`#ffb340`:`#ff6074`;let[vp,svp]=(0,v.useState)(1);let[vsf,svsf]=(0,v.useState)(`all`);let[vdata,svdata]=(0,v.useState)({items:[],total:0,total_pages:0});(0,v.useEffect)(()=>{if(e===`漏洞管理`){let q=`/api/vulnerabilities?page=${vp}&page_size=30`;if(vsf!==`all`){q+=`&severity=${vsf}`}fetch(q).then(e=>e.json()).then(e=>svdata(e)).catch(()=>{})}},[e,vp,vsf]);return e===`主机安全`?(0,$.jsxs)(`div`,{className:`module-page`,children:[(0,$.jsxs)(`div`,{className:`module-hero`,children:[(0,$.jsxs)(`div`,{children:[(0,$.jsx)(`span`,{className:`eyebrow`,children:`HOST SECURITY`}),(0,$.jsx)(`h1`,{children:`主机安全`}),(0,$.jsx)(`p`,{children:`Wazuh Agent 主机防护、系统变更与登录行为`})]}),(0,$.jsxs)(`div`,{className:`module-kpis`,children:[(0,$.jsxs)(`b`,{children:[t.agentsActive,(0,$.jsx)(`small`,{children:`在线 Agent`})]}),(0,$.jsxs)(`b`,{children:[t.hostAlerts24h,(0,$.jsx)(`small`,{children:`24H 主机事件`})]}),(0,$.jsxs)(`b`,{children:[t.hostHighAlerts24h,(0,$.jsx)(`small`,{children:`高危事件`})]})]})]}),(0,$.jsx)(Z9,{title:`主机 Agent 状态`,children:(0,$.jsxs)(`div`,{className:`data-table`,children:[(0,$.jsxs)(`div`,{className:`table-head`,children:[(0,$.jsx)(`span`,{children:`ID`}),(0,$.jsx)(`span`,{children:`主机名称`}),(0,$.jsx)(`span`,{children:`IP`}),(0,$.jsx)(`span`,{children:`系统`}),(0,$.jsx)(`span`,{children:`版本`}),(0,$.jsx)(`span`,{children:`状态`})]}),t.agents.map(e=>(0,$.jsxs)(`div`,{className:`table-row`,children:[(0,$.jsx)(`span`,{children:e.id}),(0,$.jsx)(`span`,{children:e.name}),(0,$.jsx)(`span`,{children:e.ip}),(0,$.jsx)(`span`,{children:e.os}),(0,$.jsx)(`span`,{children:e.version}),(0,$.jsx)(`span`,{style:{color:r(e.status)},children:e.status})]},e.id))]})}),(0,$.jsx)(Z9,{title:`最近主机事件`,children:(0,$.jsx)(Q9,{events:(!window.__alertFilter||window.__alertFilter==='all')?t.hostEvents:t.hostEvents.filter(e=>window.__alertFilter==='critical'?e.level>=12:window.__alertFilter==='high'?e.level>=8&&e.level<12:window.__alertFilter==='medium'?e.level>=4&&e.level<8:e.level<4),onSelect:n})})]}):e===`网络安全`?(0,$.jsxs)(`div`,{className:`module-page`,children:[(0,$.jsxs)(`div`,{className:`module-hero`,children:[(0,$.jsxs)(`div`,{children:[(0,$.jsx)(`span`,{className:`eyebrow`,children:`NETWORK SECURITY`}),(0,$.jsx)(`h1`,{children:`网络安全`}),(0,$.jsx)(`p`,{children:`网络入侵、异常流量和攻击源分析`})]}),(0,$.jsxs)(`div`,{className:`not-connected`,children:[(0,$.jsx)(V9,{size:18}),` Suricata 未接入`]})]}),(0,$.jsxs)(`div`,{className:`fw-dashboard`,children:[
+}function Z9({title:e,children:t,className:n=``}){return(0,$.jsxs)(`section`,{className:`panel ${n}`,children:[(0,$.jsxs)(`div`,{className:`panel-title`,children:[(0,$.jsx)(`span`,{className:`diamond`}),e,(0,$.jsx)(`span`,{className:`line`})]}),t]})}function sevBucket(e){return e.severityLabel||(e.level>=12?'critical':e.level>=8?'high':e.level>=4?'medium':'low')}function lee({module:e,live:t,onEventSelect:n,onVulnSelect:i}){let r=e=>e===`active`?`#28e6a6`:e===`未接入`?`#ffb340`:`#ff6074`;let[vp,svp]=(0,v.useState)(1);let[vsf,svsf]=(0,v.useState)(`all`);let[vdata,svdata]=(0,v.useState)({items:[],total:0,total_pages:0});(0,v.useEffect)(()=>{if(e===`漏洞管理`){let q=`/api/vulnerabilities?page=${vp}&page_size=30`;if(vsf!==`all`){q+=`&severity=${vsf}`}fetch(q).then(e=>e.json()).then(e=>svdata(e)).catch(()=>{})}},[e,vp,vsf]);return e===`主机安全`?(0,$.jsxs)(`div`,{className:`module-page`,children:[(0,$.jsxs)(`div`,{className:`module-hero`,children:[(0,$.jsxs)(`div`,{children:[(0,$.jsx)(`span`,{className:`eyebrow`,children:`HOST SECURITY`}),(0,$.jsx)(`h1`,{children:`主机安全`}),(0,$.jsx)(`p`,{children:`Wazuh Agent 主机防护、系统变更与登录行为`})]}),(0,$.jsxs)(`div`,{className:`module-kpis`,children:[(0,$.jsxs)(`b`,{children:[t.agentsActive,(0,$.jsx)(`small`,{children:`在线 Agent`})]}),(0,$.jsxs)(`b`,{children:[t.hostAlerts24h,(0,$.jsx)(`small`,{children:`24H 主机事件`})]}),(0,$.jsxs)(`b`,{children:[t.hostHighAlerts24h,(0,$.jsx)(`small`,{children:`高危事件`})]})]})]}),(0,$.jsx)(Z9,{title:`主机 Agent 状态`,children:(0,$.jsxs)(`div`,{className:`data-table`,children:[(0,$.jsxs)(`div`,{className:`table-head`,children:[(0,$.jsx)(`span`,{children:`ID`}),(0,$.jsx)(`span`,{children:`主机名称`}),(0,$.jsx)(`span`,{children:`IP`}),(0,$.jsx)(`span`,{children:`系统`}),(0,$.jsx)(`span`,{children:`版本`}),(0,$.jsx)(`span`,{children:`状态`})]}),t.agents.map(e=>(0,$.jsxs)(`div`,{className:`table-row`,children:[(0,$.jsx)(`span`,{children:e.id}),(0,$.jsx)(`span`,{children:e.name}),(0,$.jsx)(`span`,{children:e.ip}),(0,$.jsx)(`span`,{children:e.os}),(0,$.jsx)(`span`,{children:e.version}),(0,$.jsx)(`span`,{style:{color:r(e.status)},children:e.status})]},e.id))]})}),(0,$.jsx)(Z9,{title:`最近主机事件`,children:(0,$.jsx)(Q9,{events:(!window.__alertFilter||window.__alertFilter==='all')?t.hostEvents:t.hostEvents.filter(e=>window.__alertFilter==='critical'?e.level>=12:window.__alertFilter==='high'?e.level>=8&&e.level<12:window.__alertFilter==='medium'?e.level>=4&&e.level<8:e.level<4),onSelect:n})})]}):e===`网络安全`?(0,$.jsxs)(`div`,{className:`module-page`,children:[(0,$.jsxs)(`div`,{className:`module-hero`,children:[(0,$.jsxs)(`div`,{children:[(0,$.jsx)(`span`,{className:`eyebrow`,children:`NETWORK SECURITY`}),(0,$.jsx)(`h1`,{children:`网络安全`}),(0,$.jsx)(`p`,{children:`网络入侵、异常流量和攻击源分析`})]}),(0,$.jsxs)(`div`,{className:`not-connected`,children:[(0,$.jsx)(V9,{size:18}),` Suricata 未接入`]})]}),(0,$.jsxs)(`div`,{className:`fw-dashboard`,children:[
   (0,$.jsxs)(`div`,{style:{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:'12px',marginBottom:'15px'},children:[
     (0,$.jsxs)(`div`,{style:{background:'#1a2340',padding:'15px',borderRadius:'8px',cursor:'pointer'},onClick:()=>{window.__fwFilter='all';window.dispatchEvent(new CustomEvent('navigateTo',{detail:'告警中心'}))},children:[(0,$.jsx)(`div`,{style:{fontSize:'24px',fontWeight:'bold',color:'#4d68ff'},children:(t.firewall&&t.firewall.alerts24h)||0}),(0,$.jsx)(`div`,{style:{color:'#9da8c8',fontSize:'12px'},children:`24H防火墙告警`})]}),
     (0,$.jsxs)(`div`,{style:{background:'#1a2340',padding:'15px',borderRadius:'8px'},children:[(0,$.jsx)(`div`,{style:{fontSize:'24px',fontWeight:'bold',color:'#ff4d4f'},children:(t.firewall&&t.firewall.blocked)||0}),(0,$.jsx)(`div`,{style:{color:'#9da8c8',fontSize:'12px'},children:`阻断`})]}),
