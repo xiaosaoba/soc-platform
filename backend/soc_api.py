@@ -95,6 +95,20 @@ def map_fw_severity(raw, rule_level=0):
     if lv >= 4: return 'medium', 5
     return 'low', lv if lv > 0 else 2
 
+def vuln_bucket(score):
+    """CVSS 分数 -> 四级（严重9-10 / 高危7-8.9 / 中危4-6.9 / 低危<4）。"""
+    try:
+        sc = float(score)
+    except (TypeError, ValueError):
+        sc = -1
+    if sc >= 9.0:
+        return 'Critical'
+    if sc >= 7.0:
+        return 'High'
+    if sc >= 4.0:
+        return 'Medium'
+    return 'Low'
+
 def level_to_bucket(level):
     """Wazuh rule.level 数值 -> 平台级别分档（主机告警用）。"""
     lv = level or 0
@@ -671,13 +685,14 @@ def metrics(time_range='now-24h'):
     except urllib.error.HTTPError as e:
         if e.code not in (400,404): raise
     try:
-        vq={'size':30,'track_total_hits':True,'sort':[{'vulnerability.severity':{'order':'desc','unmapped_type':'keyword'}}],'query':{'match_all':{}},'_source':['agent.name','host.os.full','vulnerability.id','vulnerability.title','vulnerability.severity','vulnerability.description','vulnerability.detected_at','vulnerability.published_at','vulnerability.reference','vulnerability.score.base','package.name','package.version','package.description','vulnerability.status']}
+        vq={'size':30,'track_total_hits':True,'sort':[{'vulnerability.severity':{'order':'desc','unmapped_type':'keyword'}}],'query':{'match_all':{}},'aggs':{'sev':{'range':{'field':'vulnerability.score.base','ranges':[{'key':'Critical','from':9},{'key':'High','from':7,'to':9},{'key':'Medium','from':4,'to':7},{'key':'Low','to':4}]}}},'_source':['agent.name','host.os.full','vulnerability.id','vulnerability.title','vulnerability.severity','vulnerability.description','vulnerability.detected_at','vulnerability.published_at','vulnerability.reference','vulnerability.score.base','package.name','package.version','package.description','vulnerability.status']}
         vulns=get_json('https://127.0.0.1:9200/wazuh-states-vulnerabilities-*/_search','POST',vq,CREDS['WAZUH_DASHBOARD_USER'],CREDS['WAZUH_DASHBOARD_PASSWORD'])
         total=vulns.get('hits',{}).get('total',0); result['vulnerabilities']['total']=total.get('value',0) if isinstance(total,dict) else total
-        sev={}
+        sev={b['key']:b['doc_count'] for b in vulns.get('aggregations',{}).get('sev',{}).get('buckets',[])}
+        result['vulnerabilities']['severity']=sev
         for hit in vulns.get('hits',{}).get('hits',[]):
             s=hit.get('_source',{}); v=s.get('vulnerability',{}); p=s.get('package',{}); a=s.get('agent',{})
-            level=v.get('severity','Unknown'); sev[level]=sev.get(level,0)+1
+            level=vuln_bucket((v.get('score') or {}).get('base'))
             result['vulnerabilities']['items'].append({'id':v.get('id','-'),'title':v.get('title','-'),'severity':level,'agent':a.get('name','-'),'os':(s.get('host') or {}).get('os',{}).get('full','-'),'package':p.get('name','-'),'version':p.get('version','-'),'package_desc':p.get('description','-'),'description':v.get('description','-'),'detected_at':v.get('detected_at','-'),'published_at':v.get('published_at','-'),'reference':v.get('reference','-'),'score':(v.get('score') or {}).get('base','-'),'status':v.get('status','Active')})
         result['vulnerabilities']['severity']=sev
     except urllib.error.HTTPError as e:
@@ -693,16 +708,19 @@ def get_vulnerabilities(page=1, page_size=30, severity=None):
         'size': page_size,
         'from': from_,
         'track_total_hits': True,
-        'sort': [{'vulnerability.severity': {'order': 'desc', 'unmapped_type': 'keyword'}}],
+        'sort': [{'vulnerability.score.base': {'order': 'desc', 'unmapped_type': 'float'}}],
         '_source': ['agent.name', 'host.os.full', 'vulnerability.id', 'vulnerability.title',
                     'vulnerability.severity', 'vulnerability.description', 'vulnerability.detected_at',
                     'vulnerability.published_at', 'vulnerability.reference', 'vulnerability.score.base',
                     'package.name', 'package.version', 'package.description', 'vulnerability.status']
     }
-    if severity:
-        query['query'] = {'term': {'vulnerability.severity': severity}}
+    SEV_RANGE = {'Critical': {'gte': 9}, 'High': {'gte': 7, 'lt': 9},
+             'Medium': {'gte': 4, 'lt': 7}, 'Low': {'lt': 4}}
+    if severity and severity != 'all' and severity in SEV_RANGE:
+        query['query'] = {'range': {'vulnerability.score.base': SEV_RANGE[severity]}}
     else:
         query['query'] = {'match_all': {}}
+    query['aggs'] = {'sev': {'range': {'field': 'vulnerability.score.base', 'ranges':[{'key':'Critical','from':9},{'key':'High','from':7,'to':9},{'key':'Medium','from':4,'to':7},{'key':'Low','to':4}]}}}
     try:
         vulns = get_json('https://127.0.0.1:9200/wazuh-states-vulnerabilities-*/_search', 'POST', query,
                         CREDS['WAZUH_DASHBOARD_USER'], CREDS['WAZUH_DASHBOARD_PASSWORD'])
@@ -714,7 +732,7 @@ def get_vulnerabilities(page=1, page_size=30, severity=None):
             v = s.get('vulnerability', {})
             p = s.get('package', {})
             a = s.get('agent', {})
-            level = v.get('severity', 'Unknown')
+            level = vuln_bucket((v.get('score') or {}).get('base'))
             items.append({
                 'id': v.get('id', '-'),
                 'title': v.get('title', '-'),
@@ -731,7 +749,9 @@ def get_vulnerabilities(page=1, page_size=30, severity=None):
                 'score': (v.get('score') or {}).get('base', '-'),
                 'status': v.get('status', 'Active')
             })
-        return {'total': total_value, 'page': page, 'page_size': page_size,
+        counts = {b['key']: b['doc_count'] for b in vulns.get('aggregations', {}).get('sev', {}).get('buckets', [])}
+        counts['all'] = total_value
+        return {'total': total_value, 'page': page, 'page_size': page_size, 'counts': counts,
                 'total_pages': (total_value + page_size - 1) // page_size, 'items': items}
     except Exception as e:
         return {'total': 0, 'page': page, 'page_size': page_size, 'total_pages': 0, 'items': [], 'error': str(e)}
