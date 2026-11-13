@@ -94,3 +94,5 @@
 /* 筛选按钮样式 */
 .filter-btn{cursor:pointer;transition:all .2s}
 .filter-btn:hover{opacity:.8}
+
+.attack-card{left:auto!important;right:14px!important;top:auto!important;bottom:46px!important;max-width:238px!important;background:#101d38e6!important;border-color:#3d5c94!important;box-shadow:0 8px 20px #0006!important;backdrop-filter:blur(2px)}
