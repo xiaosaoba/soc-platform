@@ -95,4 +95,4 @@
 .filter-btn{cursor:pointer;transition:all .2s}
 .filter-btn:hover{opacity:.8}
 
-.attack-card{left:auto!important;right:14px!important;top:auto!important;bottom:46px!important;max-width:238px!important;background:#101d38e6!important;border-color:#3d5c94!important;box-shadow:0 8px 20px #0006!important;backdrop-filter:blur(2px)}
+.attack-card{left:auto!important;right:12px!important;top:auto!important;bottom:12px!important;max-width:188px!important;background:rgba(4,12,26,.76)!important;border:1px solid rgba(255,120,140,.28)!important;border-left:2px solid #ff5a72!important;border-radius:2px!important;box-shadow:none!important;padding:7px 9px!important;font-size:10px!important;line-height:1.5!important;backdrop-filter:blur(2px)}
