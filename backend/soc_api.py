@@ -405,7 +405,8 @@ def event_trend(range_str='7d'):
         if bucket in ('critical', 'high', 'medium', 'low'):
             b[bucket] += 1
         short = attack[:18]
-        b['_types'][short] = b['_types'].get(short, 0) + 1
+        if bucket in ('critical', 'high', 'medium'):
+            b['_types'][short] = b['_types'].get(short, 0) + 1
 
     points = []
     for k in order:
@@ -603,7 +604,8 @@ def metrics(time_range='now-24h'):
             event_agent = '深信服防火墙' if is_fw else agent.get('name','-')
             event = {'id':hit.get('_id',''),'index':hit.get('_index',''),'time':s.get('timestamp',''),'level':fw_level,'severity':severity_raw,'severityLabel':severity_label,'ruleId':rule.get('id',''),'description':desc,'groups':rule.get('groups',[]),'source':'firewall' if is_fw else 'host','agent':event_agent,'agentId':agent.get('id',''),'srcip':srcip,'dstip':data.get('dstip',''),'srcport':data.get('srcport',''),'dstport':data.get('dstport',''),'user':data.get('srcuser') or data.get('dstuser') or data.get('user',''),'process':data.get('process') or data.get('program_name',''),'file':data.get('path') or data.get('file',''),'decoder':decoder.get('name',''),'location':s.get('location',''),'fullLog':full_log,'data':data}
             event.update(fw_extra)
-            result['recentEvents'].append(event)
+            if fw_level >= 5:
+                result['recentEvents'].append(event)
             (result['fwEvents'] if is_fw else result['hostEvents']).append(event)
             bucket = severity_label if is_fw and severity_label else level_to_bucket(fw_level)
             result['severity'][bucket] += 1
