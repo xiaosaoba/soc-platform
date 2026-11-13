@@ -702,6 +702,93 @@ def metrics(time_range='now-24h'):
     return result
 
 # 工单管理函数
+def _sev_filter_map():
+    """四级分区过滤：主机按 rule.level；防火墙按原始日志「严重级别」。"""
+    NOT_FW = {'bool': {'must_not': [{'match_phrase': {'full_log': '严重级别'}}]}}
+    FW = {'match_phrase': {'full_log': '严重级别'}}
+    def host(rng): return {'bool': {'filter': [NOT_FW], 'must': [{'range': {'rule.level': rng}}]}}
+    def fw(txt): return {'bool': {'filter': [FW, {'match_phrase': {'full_log': '严重级别:' + txt}}]}}
+    m = {
+        'Critical': {'bool': {'should': [host({'gte': 12}), fw('严重')], 'minimum_should_match': 1}},
+        'High': {'bool': {'should': [host({'gte': 8, 'lt': 12}), fw('高')], 'minimum_should_match': 1}},
+        'Medium': {'bool': {'should': [host({'gte': 4, 'lt': 8}), fw('中')], 'minimum_should_match': 1}},
+    }
+    # 低危 = 其余全部，保证四级之和与总数严格闭合
+    m['Low'] = {'bool': {'must_not': [m['Critical'], m['High'], m['Medium']]}}
+    return m
+
+def get_alerts(page=1, page_size=20, level=None, range_param='24h'):
+    """告警中心全量分页：ES 分页查询所有日志，按四级筛选。"""
+    tr = get_time_range(range_param)
+    sev = _sev_filter_map()
+    filters = [{'range': {'timestamp': {'gte': tr}}}]
+    if level and level != 'all' and level.capitalize() in sev:
+        filters.append(sev[level.capitalize()])
+    query = {
+        'size': page_size,
+        'from': max(0, (page - 1) * page_size),
+        'track_total_hits': True,
+        'sort': [{'timestamp': {'order': 'desc'}}],
+        '_source': ['timestamp', 'rule', 'data', 'agent', 'decoder', 'full_log', 'location'],
+        'query': {'bool': {'filter': filters}},
+        'aggs': {'sev': {'filters': {'filters': sev}}},
+    }
+    try:
+        res = get_json('https://127.0.0.1:9200/wazuh-alerts-*/_search', 'POST', query,
+                       CREDS['WAZUH_DASHBOARD_USER'], CREDS['WAZUH_DASHBOARD_PASSWORD'])
+    except Exception as e:
+        logging.error("get_alerts failed: %s", e)
+        return {'total': 0, 'page': page, 'page_size': page_size, 'items': [], 'counts': {}}
+    total = res.get('hits', {}).get('total', 0)
+    total_value = total.get('value', 0) if isinstance(total, dict) else total
+    buckets = res.get('aggregations', {}).get('sev', {}).get('buckets', {})
+    counts = {k: buckets.get(k, {}).get('doc_count', 0) for k in ('Critical', 'High', 'Medium', 'Low')}
+    counts['Low'] = max(0, total_value - counts['Critical'] - counts['High'] - counts['Medium'])
+    counts['all'] = total_value
+    items = []
+    for hit in res.get('hits', {}).get('hits', []):
+        s = hit.get('_source', {})
+        rule = s.get('rule', {}); data = s.get('data', {}) or {}
+        agent = s.get('agent', {}); decoder = s.get('decoder', {})
+        full_log = s.get('full_log', '')
+        srcip = data.get('srcip', '')
+        is_fw = decoder.get('name') in ('sangfor-af', 'sangfor-waf') or 'sangfor' in str(rule.get('groups', []))
+        parsed = parse_fw_log(full_log) if is_fw else {}
+        label = ''; action = ''; attack_type = ''; log_type = ''
+        if is_fw:
+            label, fw_level = map_fw_severity(parsed.get('severity', ''), rule.get('level', 0))
+            fw_level = {'critical': 12, 'high': 8, 'medium': 5, 'low': 2}.get(label, fw_level)
+            if parsed.get('srcip'):
+                srcip = parsed['srcip']
+            if parsed.get('dstip'):
+                data['dstip'] = parsed['dstip']
+            attack_type = parsed.get('attack_type') or parsed.get('log_type') or '其他事件'
+            log_type = parsed.get('log_type', '')
+            action = parsed.get('action', '')
+            desc = fw_event_desc(parsed, rule.get('description', '防火墙事件'), full_log)
+        else:
+            fw_level = rule.get('level', 0)
+            desc = rule.get('description', '安全事件')
+        bucket = label or level_to_bucket(fw_level)
+        items.append({
+            'id': hit.get('_id', ''), 'time': s.get('timestamp', ''), 'level': fw_level,
+            'severityLabel': bucket, 'description': desc, 'groups': rule.get('groups', []),
+            'source': 'firewall' if is_fw else 'host',
+            'agent': '深信服防火墙' if is_fw else agent.get('name', '-'),
+            'agentId': agent.get('id', ''), 'srcip': srcip, 'dstip': data.get('dstip', ''),
+            'srcport': data.get('srcport') or parsed.get('srcport', ''),
+            'dstport': data.get('dstport') or parsed.get('dstport', ''),
+            'user': data.get('srcuser') or data.get('dstuser') or data.get('user', ''),
+            'process': data.get('process') or data.get('program_name', ''),
+            'file': data.get('path') or data.get('file', ''),
+            'decoder': decoder.get('name', ''), 'location': s.get('location', ''),
+            'fullLog': full_log, 'data': data, 'attack_type': attack_type,
+            'log_type': log_type, 'action': action,
+        })
+    return {'total': total_value, 'page': page, 'page_size': page_size,
+            'total_pages': (total_value + page_size - 1) // page_size if page_size else 1,
+            'counts': counts, 'items': items}
+
 def get_vulnerabilities(page=1, page_size=30, severity=None):
     from_ = (page - 1) * page_size
     query = {
@@ -920,6 +1007,13 @@ class Handler(BaseHTTPRequestHandler):
                     data = ticket; code=200
                 else:
                     data = {'error': '工单不存在'}; code=404
+            elif path == '/api/alerts':
+                params = parse_qs(parsed.query)
+                page = int(params.get('page', ['1'])[0])
+                page_size = min(100, max(1, int(params.get('page_size', ['20'])[0])))
+                level = params.get('level', ['all'])[0]
+                range_param = params.get('range', ['24h'])[0]
+                data = get_alerts(page, page_size, level, range_param); code=200
             elif path == '/api/vulnerabilities':
                 params = parse_qs(parsed.query)
                 page = int(params.get('page', ['1'])[0])
