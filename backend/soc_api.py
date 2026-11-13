@@ -404,7 +404,7 @@ def event_trend(range_str='7d'):
         b['total'] += 1
         if bucket in ('critical', 'high', 'medium', 'low'):
             b[bucket] += 1
-        short = attack[:14]
+        short = attack[:18]
         b['_types'][short] = b['_types'].get(short, 0) + 1
 
     points = []
