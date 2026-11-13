@@ -179,7 +179,7 @@ STATS_MUST_NOT = [
 FW_MUST_NOT = TRAFFIC_MUST_NOT + LOW_SEV_MUST_NOT + STATS_MUST_NOT
 
 def ai_analyze_alert(alert_info):
-    """调用AI大模型进行安全研判"""
+    """调用AI大模型进行安全研判（带重试与错误日志）"""
     prompt = f"""你是一名资深网络安全分析师。请对以下安全告警进行专业研判，输出JSON格式结果。
 
 告警信息：
@@ -196,40 +196,47 @@ def ai_analyze_alert(alert_info):
 
 请按以下JSON格式输出研判结果：
 {{
-    "threat_type": "威胁类型（如：僵尸网络、暴力破解、漏洞利用等）",
+    "threat_type": "威胁类型",
     "threat_level": "威胁等级（critical/high/medium/low）",
-    "attack_chain": "攻击链阶段（如：侦察、初始访问、执行、持久化、权限提升、防御规避、凭证访问、发现、横向移动、数据窃取、影响）",
-    "impact_assessment": "影响评估（简要说明可能造成的影响）",
-    "ioc_indicators": ["IOC指标列表（IP、域名、URL等）"],
-    "recommended_actions": ["处置建议列表（具体可执行的步骤）"],
+    "attack_chain": "攻击链阶段",
+    "impact_assessment": "影响评估",
+    "ioc_indicators": ["IOC指标列表"],
+    "recommended_actions": ["处置建议列表"],
     "false_positive_probability": "误报概率（0-100）",
     "summary": "研判摘要（一句话总结）"
 }}
 
 只输出JSON，不要输出其他内容。"""
-    
-    try:
-        data = {
-            'model': AI_MODEL,
-            'messages': [{'role': 'user', 'content': prompt}],
-            'max_tokens': 4000,
-            'temperature': 0.3
-        }
-        headers = {
-            'Content-Type': 'application/json',
-            'Authorization': f'Bearer {AI_API_KEY}'
-        }
-        req = urllib.request.Request(AI_API_URL, data=json.dumps(data).encode(), headers=headers, method='POST')
-        with urllib.request.urlopen(req, context=CTX, timeout=120) as res:
-            result = json.loads(res.read().decode())
-            content = result['choices'][0]['message']['content']
-            # 提取JSON
-            json_match = re.search(r'\{[\s\S]*\}', content)
-            if json_match:
-                return json.loads(json_match.group())
-            return {'summary': content, 'threat_type': '未知', 'threat_level': 'medium'}
-    except Exception as e:
-        return {'error': str(e), 'summary': 'AI研判失败', 'threat_type': '未知', 'threat_level': 'medium'}
+
+    data = {
+        'model': AI_MODEL,
+        'messages': [{'role': 'user', 'content': prompt}],
+        'max_tokens': 4000,
+        'temperature': 0.3
+    }
+    headers = {
+        'Content-Type': 'application/json',
+        'Authorization': f'Bearer {AI_API_KEY}'
+    }
+    last_err = None
+    for attempt in range(2):
+        try:
+            req = urllib.request.Request(AI_API_URL, data=json.dumps(data).encode(), headers=headers, method='POST')
+            with urllib.request.urlopen(req, context=CTX, timeout=180) as res:
+                result = json.loads(res.read().decode())
+                content = result['choices'][0]['message']['content'] or ''
+                json_match = re.search(r'\{[\s\S]*\}', content)
+                if json_match:
+                    return json.loads(json_match.group())
+                return {'summary': content, 'threat_type': '未知', 'threat_level': 'medium'}
+        except Exception as e:
+            last_err = e
+            logging.error("AI研判失败 attempt=%d err=%s", attempt+1, e)
+            if attempt == 0:
+                time.sleep(2)
+    return {'error': str(last_err), 'summary': 'AI研判失败', 'threat_type': '未知', 'threat_level': 'medium'}
+
+
 
 def get_firewall_data(time_range='now-24h'):
     fw = {'connected': False, 'alerts24h': 0, 'blocked': 0, 'allowed': 0, 'attackTypes': [], 'topSrcIps': [], 'topDstIps': [], 'severity': {'critical':0,'high':0,'medium':0,'low':0}, 'trend': [], 'recentEvents': []}
@@ -323,6 +330,91 @@ def get_firewall_data(time_range='now-24h'):
     except Exception as e:
         fw['error'] = str(e)
     return fw
+
+def event_trend(range_str='7d'):
+    """按天(7d/30d)或按小时(24h)聚合事件趋势，级别口径与 metrics 页面完全一致。"""
+    from datetime import datetime as _dt, timedelta, timezone
+    tr = get_time_range(range_str)
+    daily = range_str in ('7d', '30d')
+    days = 30 if range_str == '30d' else 7
+    query = {
+        'size': 5000,
+        'track_total_hits': False,
+        'query': {'bool': {
+            'filter': [{'range': {'timestamp': {'gte': tr}}}],
+            'must_not': FW_MUST_NOT
+        }},
+        'sort': [{'timestamp': {'order': 'asc'}}, {'_id': {'order': 'asc'}}]
+    }
+    hits, after = [], None
+    for _page in range(8):
+        if after:
+            query['search_after'] = after
+        alerts = get_json('https://127.0.0.1:9200/wazuh-alerts-*/_search', 'POST', query,
+                          CREDS['WAZUH_DASHBOARD_USER'], CREDS['WAZUH_DASHBOARD_PASSWORD'])
+        batch = alerts.get('hits', {}).get('hits', [])
+        if not batch:
+            break
+        hits.extend(batch)
+        after = batch[-1].get('sort')
+        if len(batch) < query['size'] or not after:
+            break
+    tz = timezone(timedelta(hours=8))
+    now = _dt.now(tz)
+    buckets, order = {}, []
+    if daily:
+        for i in range(days - 1, -1, -1):
+            key = (now - timedelta(days=i)).strftime('%Y-%m-%d')
+            buckets[key] = {'date': key, 'label': key[5:], 'total': 0,
+                            'critical': 0, 'high': 0, 'medium': 0, 'low': 0, '_types': {}}
+            order.append(key)
+    else:
+        base = now.replace(minute=0, second=0, microsecond=0)
+        for i in range(23, -1, -1):
+            t = base - timedelta(hours=i)
+            key = t.strftime('%Y-%m-%d %H')
+            buckets[key] = {'date': t.strftime('%m-%d %H:00'), 'label': t.strftime('%H:00'),
+                            'total': 0, 'critical': 0, 'high': 0, 'medium': 0, 'low': 0, '_types': {}}
+            order.append(key)
+
+    for hit in hits:
+        src = hit.get('_source', {})
+        rule = src.get('rule', {})
+        decoder = src.get('decoder', {})
+        full_log = src.get('full_log', '')
+        is_fw = decoder.get('name') in ('sangfor-af', 'sangfor-waf') or 'sangfor' in str(rule.get('groups', []))
+        if is_fw:
+            parsed = parse_fw_log(full_log)
+            bucket, _lv = map_fw_severity(parsed.get('severity', ''), rule.get('level', 0))
+            if is_traffic_log(full_log) or not parsed.get('log_type') or bucket == 'low':
+                continue
+            attack = parsed.get('attack_type') or parsed.get('log_type') or '其他事件'
+        else:
+            bucket = level_to_bucket(rule.get('level', 0))
+            attack = rule.get('description') or '其他事件'
+        ts = src.get('timestamp', '')
+        try:
+            dt = _dt.fromisoformat(ts.replace('Z', '+00:00')).astimezone(tz)
+        except Exception:
+            continue
+        key = dt.strftime('%Y-%m-%d') if daily else dt.strftime('%Y-%m-%d %H')
+        b = buckets.get(key)
+        if not b:
+            continue
+        b['total'] += 1
+        if bucket in ('critical', 'high', 'medium', 'low'):
+            b[bucket] += 1
+        short = attack[:14]
+        b['_types'][short] = b['_types'].get(short, 0) + 1
+
+    points = []
+    for k in order:
+        b = buckets[k]
+        types = sorted(b.pop('_types').items(), key=lambda x: -x[1])[:3]
+        b['types'] = [[n, c] for n, c in types]
+        b['highTotal'] = b['critical'] + b['high']
+        points.append(b)
+    return {'range': range_str, 'points': points}
 
 def metrics(time_range='now-24h'):
     result = {'live':True,'agentsTotal':0,'agentsActive':0,'agents':[],'alerts24h':0,'highAlerts24h':0,'riskScore':100,'topIps':[],'riskAssets':[],'recentEvents':[],'hostEvents':[],'fwEvents':[],'trend':[],'severity':{'critical':0,'high':0,'medium':0,'low':0},'hostSeverity':{'critical':0,'high':0,'medium':0,'low':0},'hostAlerts24h':0,'hostHighAlerts24h':0,'vulnerabilities':{'total':0,'items':[],'severity':{}}}
@@ -675,6 +767,10 @@ class Handler(BaseHTTPRequestHandler):
                 range_param = params.get('range', ['24h'])[0]
                 time_range = get_time_range(range_param)
                 data=metrics(time_range); code=200
+            elif path == '/api/trend':
+                params = parse_qs(parsed.query)
+                range_param = params.get('range', ['7d'])[0]
+                data = event_trend(range_param); code=200
             elif path == '/api/tickets':
                 params = parse_qs(parsed.query)
                 status = params.get('status', [None])[0]
